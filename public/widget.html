@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat Dwinky</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700&family=Work+Sans:wght@400;500;600&display=swap');
+
+  :root {
+    --cream: #FFF9F1;
+    --papaya: #F2704B;
+    --plum: #5B2A5E;
+    --ink: #2B1710;
+    --line: #F0E4D6;
+    --bubble-agent: #FBEFE0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Work Sans', sans-serif; background: transparent; }
+
+  /* Botón flotante (estado cerrado) */
+  #burbuja {
+    position: fixed; bottom: 20px; right: 20px;
+    width: 60px; height: 60px; border-radius: 50%;
+    background: var(--papaya); color: white; border: none;
+    font-size: 28px; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 999999;
+  }
+
+  /* Ventana de chat (estado abierto) */
+  #ventana {
+    position: fixed; bottom: 20px; right: 20px;
+    width: 360px; max-width: calc(100vw - 40px);
+    height: 520px; max-height: calc(100vh - 40px);
+    background: white; border-radius: 18px; overflow: hidden;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+    display: none; flex-direction: column;
+    z-index: 999999;
+  }
+  #ventana.abierta { display: flex; }
+
+  #header { background: var(--plum); color: white; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; }
+  #header .titulo { font-family: 'Baloo 2'; font-weight: 700; font-size: 15px; }
+  #header .sub { font-size: 11px; opacity: 0.75; }
+  #cerrar { background: none; border: none; color: white; font-size: 20px; cursor: pointer; }
+
+  #mensajes { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 8px; background: var(--cream); }
+  .msg { max-width: 82%; padding: 9px 12px; border-radius: 14px; font-size: 13.5px; line-height: 1.4; white-space: pre-wrap; }
+  .msg.agente { background: var(--bubble-agent); color: var(--ink); align-self: flex-start; }
+  .msg.usuario { background: var(--papaya); color: white; align-self: flex-end; }
+  .escribiendo { font-size: 12px; color: #8a7565; align-self: flex-start; }
+
+  #barra { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--line); background: white; }
+  #input { flex: 1; padding: 9px 12px; border-radius: 20px; border: 1px solid var(--line); font-size: 13.5px; outline: none; }
+  #enviar { background: var(--papaya); color: white; border: none; border-radius: 50%; width: 38px; height: 38px; cursor: pointer; font-size: 16px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<button id="burbuja" aria-label="Abrir chat">🍦</button>
+
+<div id="ventana">
+  <div id="header">
+    <div>
+      <div class="titulo">Valentina · Dwinky</div>
+      <div class="sub">Pregunta lo que quieras sobre nuestros helados</div>
+    </div>
+    <button id="cerrar" aria-label="Cerrar chat">✕</button>
+  </div>
+  <div id="mensajes"></div>
+  <div id="barra">
+    <input id="input" type="text" placeholder="Escribe tu mensaje..." />
+    <button id="enviar" aria-label="Enviar">➤</button>
+  </div>
+</div>
+
+<script>
+  // Identificador único por visitante, para que Valentina recuerde la conversación
+  // mientras navega la página (se guarda en este navegador, no es información sensible).
+  function obtenerSessionId() {
+    let id = localStorage.getItem("dwinky_session_id");
+    if (!id) {
+      id = "s_" + Math.random().toString(36).slice(2) + Date.now();
+      localStorage.setItem("dwinky_session_id", id);
+    }
+    return id;
+  }
+  const sessionId = obtenerSessionId();
+
+  const burbuja = document.getElementById("burbuja");
+  const ventana = document.getElementById("ventana");
+  const cerrar = document.getElementById("cerrar");
+  const mensajesEl = document.getElementById("mensajes");
+  const input = document.getElementById("input");
+  const enviar = document.getElementById("enviar");
+
+  let saludoMostrado = false;
+
+  function abrirChat() {
+    ventana.classList.add("abierta");
+    burbuja.style.display = "none";
+    if (!saludoMostrado) {
+      agregarMensaje("agente", "¡Hola! Soy Valentina de Dwinky 🍦 Helados caseros gourmet, fruta 100% natural. ¿En qué te ayudo?");
+      saludoMostrado = true;
+    }
+  }
+
+  // Se abre solo apenas carga la página.
+  abrirChat();
+
+  burbuja.addEventListener("click", abrirChat);
+
+  cerrar.addEventListener("click", () => {
+    ventana.classList.remove("abierta");
+    burbuja.style.display = "flex";
+  });
+
+  function agregarMensaje(rol, texto) {
+    const div = document.createElement("div");
+    div.className = "msg " + (rol === "usuario" ? "usuario" : "agente");
+    div.textContent = texto;
+    mensajesEl.appendChild(div);
+    mensajesEl.scrollTop = mensajesEl.scrollHeight;
+  }
+
+  async function enviarMensaje() {
+    const texto = input.value.trim();
+    if (!texto) return;
+    agregarMensaje("usuario", texto);
+    input.value = "";
+
+    const escribiendo = document.createElement("div");
+    escribiendo.className = "escribiendo";
+    escribiendo.textContent = "Valentina está escribiendo…";
+    mensajesEl.appendChild(escribiendo);
+    mensajesEl.scrollTop = mensajesEl.scrollHeight;
+
+    try {
+      const resp = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mensaje: texto, sessionId }),
+      });
+      const data = await resp.json();
+      escribiendo.remove();
+      agregarMensaje("agente", data.respuesta || "Disculpa, ¿me repites eso? 🙏");
+    } catch (e) {
+      escribiendo.remove();
+      agregarMensaje("agente", "Uy, se me cayó la conexión un momento. ¿Puedes intentar de nuevo?");
+    }
+  }
+
+  enviar.addEventListener("click", enviarMensaje);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") enviarMensaje(); });
+</script>
+
+</body>
+</html>
