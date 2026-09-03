@@ -1,5 +1,6 @@
 // server.js — Agente de ventas Dwinky (Valentina)
 // Conecta WhatsApp Cloud API + Messenger + Instagram (todo vía Meta Graph API)
+// + WhatsApp vía Wati (Coexistence) ← NUEVO
 // y usa la API de Anthropic (Claude) como cerebro conversacional.
 
 const express = require("express");
@@ -20,8 +21,11 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;           // para enviarte el
 const EMAIL_NOTIFICACIONES = process.env.EMAIL_NOTIFICACIONES || "hola@dwinky.com";
 const WHATSAPP_DUENO = process.env.WHATSAPP_DUENO;            // tu número (con código de país, ej: 573235178058) para recibir la notificación por WhatsApp también
 
+// ── NUEVO: Variables de entorno para Wati (WhatsApp vía Coexistence) ──────
+const WATI_API_ENDPOINT = process.env.WATI_API_ENDPOINT;     // ej: https://live-mt-server.wati.io/123456
+const WATI_API_TOKEN = process.env.WATI_API_TOKEN;           // tu API Key/Token de Wati (Bearer)
+
 // ── Memoria de conversación en RAM (simple, se reinicia si el servidor reinicia) ──
-// Para producción real, esto debería guardarse en una base de datos (Postgres, Redis, etc.)
 const historiales = new Map(); // clave: id del usuario, valor: array de mensajes
 
 function obtenerHistorial(id) {
@@ -76,12 +80,10 @@ app.post("/webhook", async (req, res) => {
         await enviarWhatsApp(de, respuesta);
       }
 
-      // El cliente puede enviar su ubicación (pin) en vez de escribir la dirección.
       if (mensaje && mensaje.type === "location") {
         const de = mensaje.from;
         const { latitude, longitude, address, name } = mensaje.location;
         const mapa = `https://www.google.com/maps?q=${latitude},${longitude}`;
-        // Se lo pasamos a Valentina como si fuera un mensaje de texto, para que lo use en el pedido.
         const textoUbicacion = `[El cliente compartió su ubicación de entrega]\nCoordenadas: ${latitude}, ${longitude}\nMapa: ${mapa}${address ? `\nDirección aproximada: ${address}` : ""}${name ? `\nLugar: ${name}` : ""}`;
         const respuesta = await generarRespuesta(de, textoUbicacion);
         await enviarWhatsApp(de, respuesta);
@@ -100,6 +102,27 @@ app.post("/webhook", async (req, res) => {
     }
   } catch (err) {
     console.error("Error procesando webhook:", err.message);
+  }
+});
+
+// ── 2c. NUEVO: Recepción de mensajes de WhatsApp vía Wati (Coexistence) ──
+// URL a registrar en Wati: https://TU-APP.up.railway.app/webhook-wati
+app.post("/webhook-wati", async (req, res) => {
+  res.sendStatus(200);
+
+  try {
+    const body = req.body;
+    const esMensajeDeTexto = body.type === "text" && typeof body.text === "string";
+    const esDelCliente = body.owner === false;
+
+    if (esMensajeDeTexto && esDelCliente && body.waId) {
+      const de = body.waId;
+      const texto = body.text;
+      const respuesta = await generarRespuesta(`wati-${de}`, texto);
+      await enviarWati(de, respuesta);
+    }
+  } catch (err) {
+    console.error("Error procesando webhook de Wati:", err.message);
   }
 });
 
@@ -130,11 +153,8 @@ async function generarRespuesta(idUsuario, textoEntrante) {
     .map((b) => b.text)
     .join("\n") || "Disculpa, ¿me repites eso? 🙏";
 
-  // Guardamos la respuesta completa (con el bloque técnico) en el historial,
-  // para que el modelo recuerde que ya generó ese pedido si el cliente sigue escribiendo.
   historial.push({ role: "assistant", content: textoCompleto });
 
-  // Separamos el bloque técnico [[DATOS_JSON]]...[[/DATOS_JSON]] del mensaje visible.
   const { textoVisible, datos } = extraerDatosOcultos(textoCompleto);
 
   if (datos) {
@@ -149,7 +169,6 @@ async function generarRespuesta(idUsuario, textoEntrante) {
   return textoVisible;
 }
 
-// Quita el bloque técnico del texto que ve el cliente y devuelve los datos parseados.
 function extraerDatosOcultos(texto) {
   const match = texto.match(/\[\[DATOS_JSON\]\]([\s\S]*?)\[\[\/DATOS_JSON\]\]/);
   if (!match) return { textoVisible: texto, datos: null };
@@ -164,7 +183,6 @@ function extraerDatosOcultos(texto) {
   return { textoVisible, datos };
 }
 
-// Envía un correo con los datos del pedido o visita usando la API de Resend.
 async function notificarPorCorreo(datos) {
   if (!RESEND_API_KEY) {
     console.log("RESEND_API_KEY no configurada — datos capturados pero no se envió correo:", datos);
@@ -199,7 +217,7 @@ async function notificarPorCorreo(datos) {
   await axios.post(
     "https://api.resend.com/emails",
     {
-      from: "Valentina (Dwinky) <pedidos@dwinky-notificaciones.com>", // ajusta con tu dominio verificado en Resend
+      from: "Valentina (Dwinky) <pedidos@dwinky-notificaciones.com>",
       to: EMAIL_NOTIFICACIONES,
       subject: asunto,
       html: cuerpo,
@@ -208,7 +226,6 @@ async function notificarPorCorreo(datos) {
   );
 }
 
-// Envía un resumen por WhatsApp al número del dueño (ver limitación de la ventana de 24h en el README).
 async function notificarPorWhatsApp(datos) {
   if (!WHATSAPP_DUENO) {
     console.log("WHATSAPP_DUENO no configurado — no se envió notificación por WhatsApp.");
@@ -223,7 +240,7 @@ async function notificarPorWhatsApp(datos) {
   await enviarWhatsApp(WHATSAPP_DUENO, texto);
 }
 
-// ── 4. Envío de respuesta por WhatsApp ──
+// ── 4. Envío de respuesta por WhatsApp (Meta Cloud API directa) ──
 async function enviarWhatsApp(para, texto) {
   await axios.post(
     `https://graph.facebook.com/v19.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
@@ -233,6 +250,26 @@ async function enviarWhatsApp(para, texto) {
       text: { body: texto },
     },
     { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+  );
+}
+
+// ── 4b. NUEVO: Envío de respuesta por WhatsApp vía Wati ──
+async function enviarWati(para, texto) {
+  if (!WATI_API_ENDPOINT || !WATI_API_TOKEN) {
+    console.error("WATI_API_ENDPOINT o WATI_API_TOKEN no configurados — no se pudo responder por Wati.");
+    return;
+  }
+
+  await axios.post(
+    `${WATI_API_ENDPOINT}/api/v1/sendSessionMessage/${para}`,
+    {},
+    {
+      params: { messageText: texto },
+      headers: {
+        Authorization: `Bearer ${WATI_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    }
   );
 }
 
