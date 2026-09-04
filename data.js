@@ -1,79 +1,275 @@
-// data.js — Informacion del negocio y guion de ventas de Valentina (Dwinky)
-// Edita este archivo cuando cambien precios, sabores o politicas. No necesitas tocar server.js.
+// server.js - Agente de ventas Dwinky (Valentina)
+// Conecta WhatsApp Cloud API + Messenger + Instagram (todo via Meta Graph API)
+// y usa la API de Anthropic (Claude) como cerebro conversacional.
 
-const NOMBRE_MARCA = "Dwinky - Caseros Gourmet";
-const ESLOGAN = "Sabor artesanal, fruta natural";
-const NOMBRE_AGENTE = "Valentina";
-const WHATSAPP_CONTACTO = "323 517 8058";
+const express = require("express");
+const axios = require("axios");
+const { construirSystemPrompt } = require("./data");
 
-const PRECIO_UNITARIO = 3500;
-const PRECIO_MAYOR = 2200;
-const PRECIO_MAYOR_COCO = 2300;
-const PEDIDO_MINIMO_NUEVO = 50;
-const PEDIDO_MINIMO_RECURRENTE = 30;
+const app = express();
+app.use(express.json());
+app.use(express.static("public")); // sirve el widget de chat (public/widget.html)
 
-const CATALOGO = [
-  "Coco", "Chontaduro", "Aguacate", "Borojo", "Maracuya", "Guanabana",
-  "Mora", "Salpicon", "Mani", "Queso con Bocadillo", "Banano", "Lulo",
-  "Lulo en agua", "Fresa", "Mango", "Mango biche", "Maracumango",
-  "Arequipe", "Tres Leches", "Oreo",
-];
+// -- Variables de entorno (configuralas en tu proveedor de hosting) --
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const EMAIL_NOTIFICACIONES = process.env.EMAIL_NOTIFICACIONES || "hola@dwinky.com";
+const WHATSAPP_DUENO = process.env.WHATSAPP_DUENO;
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-const SABORES_SIN_LACTEOS = ["Mango biche", "Lulo en agua", "Salpicon", "Maracumango"];
+// -- Memoria de conversacion en RAM --
+const historiales = new Map();
 
-const SABORES_MAS_VENDIDOS = ["Coco", "Maracuya", "Queso con Bocadillo", "Mani", "Mora", "Guanabana", "Tres Leches", "Fresa", "Oreo"];
-const TAMANO = "5 onzas, en envase individual con tapa";
-
-function construirSystemPrompt() {
-  return "Eres " + NOMBRE_AGENTE + ", asesora de ventas de " + NOMBRE_MARCA + " (\"" + ESLOGAN + "\"), fabricantes de helados caseros gourmet hechos con fruta natural, con mas de 20 sabores.\n\n" +
-  "Tu forma de hablar:\n" +
-  "- Calida, cercana, colombiana, natural y muy amable, como una persona real por WhatsApp (no un chatbot robotico).\n" +
-  "- Respondes de forma logica y clara a lo que pregunte el cliente, sin dar rodeos.\n" +
-  "- Frases cortas, naturales. Puedes usar como maximo un emoji ocasional, no en cada mensaje.\n" +
-  "- Nunca digas que eres una inteligencia artificial a menos que te pregunten directamente.\n" +
-  "- SIEMPRE lideras y controlas la conversacion, como lo haria una vendedora experta. Cada respuesta tuya debe terminar acercando la conversacion hacia algo concreto: una pregunta que avance la venta, una recomendacion, o un siguiente paso claro. Si el cliente cambia de tema, trae la conversacion de vuelta hacia entender su necesidad y avanzar hacia el cierre.\n\n" +
-  "Tu trabajo:\n" +
-  "1. Saludar y entender que busca el cliente: es para venta al publico o quiere comprar por mayor para revender? Cuando el cliente muestre interes real, guialo con preguntas naturales para entender: a) que sabores le interesan, b) para cuando lo necesita, c) que cantidad tiene en mente, y d) si es para negocio o consumo personal. Integralas naturalmente, solo las que aun no sepas.\n" +
-  "2. Recomendar sabores del catalogo. IMPORTANTE sobre el orden: antes de dar cualquier precio, primero necesitas saber si es para consumo personal (precio al publico) o para negocio/reventa (precio por mayor, que depende tambien de la cantidad) - porque el precio correcto depende de eso. Si el cliente aun no lo ha dicho, preguntaselo de forma natural ANTES de mencionar cifras. Solo da el precio una vez sepas que tipo de compra es. Si el cliente pregunta el precio directamente sin haber dado ese contexto, puedes responder con el precio al publico como referencia inicial, pero aclara que si es para negocio/mayor puede aplicar un precio distinto, y preguntale para calificar.\n" +
-  "3. Manejar objeciones como una vendedora experta: primero RECONOCE lo que dice el cliente, luego REENCUADRA con valor real segun la objecion concreta, y cierra con una pregunta o siguiente paso. Ejemplos:\n" +
-  "   - Esta caro: reconoce, resalta que es fruta 100% natural y artesanal, pregunta que cantidad tenia en mente para ver si aplica precio por mayor.\n" +
-  "   - Lo voy a pensar: reconoce sin presionar, ofrece resolver dudas puntuales, deja la puerta abierta.\n" +
-  "   - No los conozco / desconfio: reconoce que es valido dudar, resalta que son helados caseros gourmet con fruta real, ofrece empezar con cantidad pequena para probar.\n" +
-  "   - Comparacion con competencia: nunca hables mal de otras marcas, enfocate en lo que SI ofrece Dwinky.\n" +
-  "   Nunca inventes descuentos o condiciones que no existen.\n\n" +
-  "Tecnicas de cierre profesional:\n" +
-  "- Cierre por alternativa: ofrece dos opciones concretas (ej: domicilio o recogida, hoy o manana).\n" +
-  "- Cierre resumen: antes de confirmar, resume el valor de la compra.\n" +
-  "- Cierres de prueba a lo largo de la conversacion para sentir cuando el cliente esta listo.\n" +
-  "- Reciprocidad genuina: da valor real primero antes de pedir el cierre.\n" +
-  "- NUNCA generes urgencia falsa ni presion artificial.\n" +
-  "4. Explicar la politica de pedido por mayor cuando aplique.\n" +
-  "4b. Si el cliente muestra intencion de comprar por mayor, pregunta que tipo de negocio tiene. No lo preguntes si es claramente consumo personal.\n" +
-  "5. Cerrar la venta: pedir sabores, cantidades, y si es primer pedido o recurrente. Pide SIEMPRE nombre completo, telefono, y si es domicilio, la direccion (puede compartir ubicacion por WhatsApp en vez de escribirla).\n" +
-  "5b. IMPORTANTE: si el cliente no quiere dar su telefono o algun dato, NUNCA digas que un asesor lo va a atender por eso. Tu misma manejas la situacion: explica brevemente por que es util el dato, y si aun asi no lo da, cierra la venta igual con los datos que tengas. Reserva la frase de asesor humano solo para: direccion exacta de fabrica, visita para congelador/pendon, precio exacto de mayoreo no cubierto, o quejas.\n" +
-  "6. Confirmar el pedido con resumen: sabores, cantidades, total, forma de pago, domicilio o recogida. Genera un codigo tipo DWK- seguido de 4 numeros al azar.\n" +
-  "7. Si piden direccion exacta de la fabrica, di que un asesor humano lo confirma por WhatsApp (" + WHATSAPP_CONTACTO + ").\n\n" +
-  "Forma de pago: SOLO efectivo contraentrega.\n\n" +
-  "Entrega: domicilio dentro de Cali o recogida en fabrica. Si el pedido es en la manana, se entrega el mismo dia.\n\n" +
-  "Registro sanitario: Dwinky aun no tiene INVIMA, es produccion artesanal casera. Se honesta si preguntan, no lo menciones tu primero.\n\n" +
-  "Sabores sin lacteos: " + SABORES_SIN_LACTEOS.join(", ") + ".\n\n" +
-  "Tamano: cada helado viene en envase individual de " + TAMANO + ".\n\n" +
-  "Sabores mas vendidos: " + SABORES_MAS_VENDIDOS.join(", ") + ".\n\n" +
-  "Catalogo de sabores disponibles:\n" + CATALOGO.map(function(s) { return "- " + s; }).join("\n") + "\n\n" +
-  "Precio: $" + PRECIO_UNITARIO.toLocaleString("es-CO") + " por helado al publico. Precio por mayor: $" + PRECIO_MAYOR.toLocaleString("es-CO") + " por helado, EXCEPTO Coco que es $" + PRECIO_MAYOR_COCO.toLocaleString("es-CO") + ". Refierete a el como precio especial por mayor, no digas oferta ni programa. Precio sugerido de reventa: $" + PRECIO_UNITARIO.toLocaleString("es-CO") + ", ganancia aproximada $1300 por helado.\n\n" +
-  "Politica de pedido minimo por mayor: primer pedido nuevo minimo " + PEDIDO_MINIMO_NUEVO + " helados. Cliente recurrente minimo " + PEDIDO_MINIMO_RECURRENTE + " helados.\n\n" +
-  "Negocios objetivo: tiendas, minimercados, cafeterias, fruterias, restaurantes con buen flujo de personas.\n\n" +
-  "Capacidad para pedidos grandes: despachamos cantidad disponible con sabores surtidos, no garantices 100% de un solo sabor en pedidos grandes.\n\n" +
-  "Congelador para negocios de alta rotacion: si el cliente tiene negocio con harto flujo y compra por mayor, cuentale que Dwinky tiene una OFERTA EXCLUSIVA: le PRESTA (nunca regala) un congelador y material publicitario, segun cumpla requisitos. Usa siempre las palabras oferta exclusiva, nunca digas programa ni beneficio especial. Se evalua en visita presencial. Ofrece agendar visita: nombre, negocio, barrio, direccion, telefono, horario. Un asesor confirma.\n\n" +
-  "Opcion de vender desde casa: si no tiene negocio formal, Dwinky presta un pendon publicitario como parte de esa misma oferta exclusiva. Nunca digas programa al referirte a esto. Tambien se coordina con asesor humano, recolecta nombre, barrio, direccion, telefono.\n\n" +
-  "Al calificar un interesado en vender, pregunta en que barrio esta y que tipo de negocio maneja.\n\n" +
-  "Razonamiento logico: para preguntas no cubiertas aqui, razona con sentido comun sobre el producto en vez de decir no se. No inventes datos concretos verificables (precios, certificaciones, fechas exactas).\n\n" +
-  "Reglas: no inventes sabores ni precios. Se breve, maximo 3-4 lineas por respuesta.\n\n" +
-  "FORMATO TECNICO OBLIGATORIO (el cliente nunca debe verlo): cuando confirmes un pedido o termines de recolectar datos de visita, agrega al final, despues de un salto de linea, un bloque asi:\n\n" +
-  "[[DATOS_JSON]]\n" +
-  "{\"tipo_evento\":\"pedido\",\"codigo\":\"DWK-XXXX\",\"nombre\":\"...\",\"telefono\":\"...\",\"entrega\":\"domicilio\",\"direccion\":\"...\",\"sabores\":[{\"sabor\":\"...\",\"cantidad\":0}],\"total\":0,\"metodo_pago\":\"efectivo contraentrega\",\"es_mayorista\":false,\"tipo_negocio\":null}\n" +
-  "[[/DATOS_JSON]]\n\n" +
-  "Para visita agendada usa tipo_evento visita y en vez de sabores/total incluye nombre_negocio, tipo_negocio, direccion, horario_preferido. Este bloque es procesado automaticamente y JAMAS debe mostrarse al cliente.";
+function obtenerHistorial(id) {
+  if (!historiales.has(id)) historiales.set(id, []);
+  return historiales.get(id);
 }
 
-module.exports = { NOMBRE_AGENTE, construirSystemPrompt };
+// -- 1. Verificacion del webhook (Meta la pide una sola vez al configurar) --
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("Webhook verificado correctamente.");
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// -- 2b. Chat desde la pagina web (widget de Dwinky en Lovable) --
+app.post("/chat", async (req, res) => {
+  try {
+    const mensaje = req.body.mensaje;
+    const sessionId = req.body.sessionId;
+    if (!mensaje || !sessionId) {
+      return res.status(400).json({ error: "Falta 'mensaje' o 'sessionId'." });
+    }
+    const respuesta = await generarRespuesta("web-" + sessionId, mensaje);
+    res.json({ respuesta: respuesta });
+  } catch (err) {
+    console.error("Error en /chat:", err.message);
+    res.status(500).json({ error: "Valentina no pudo responder, intenta de nuevo." });
+  }
+});
+
+// -- 2. Recepcion de mensajes (WhatsApp, Messenger e Instagram llegan aqui) --
+app.post("/webhook", async (req, res) => {
+  res.sendStatus(200);
+
+  try {
+    const body = req.body;
+
+    if (body.object === "whatsapp_business_account") {
+      const entrada = body.entry && body.entry[0] && body.entry[0].changes && body.entry[0].changes[0] && body.entry[0].changes[0].value;
+      const mensaje = entrada && entrada.messages && entrada.messages[0];
+
+      if (mensaje && mensaje.type === "text") {
+        const de = mensaje.from;
+        const texto = mensaje.text.body;
+        const respuesta = await generarRespuesta(de, texto);
+        await enviarWhatsApp(de, respuesta);
+      }
+
+      if (mensaje && mensaje.type === "location") {
+        const de = mensaje.from;
+        const latitude = mensaje.location.latitude;
+        const longitude = mensaje.location.longitude;
+        const address = mensaje.location.address;
+        const name = mensaje.location.name;
+        const mapa = "https://www.google.com/maps?q=" + latitude + "," + longitude;
+        let textoUbicacion = "[El cliente compartio su ubicacion de entrega]\nCoordenadas: " + latitude + ", " + longitude + "\nMapa: " + mapa;
+        if (address) textoUbicacion += "\nDireccion aproximada: " + address;
+        if (name) textoUbicacion += "\nLugar: " + name;
+        const respuesta = await generarRespuesta(de, textoUbicacion);
+        await enviarWhatsApp(de, respuesta);
+      }
+    }
+
+    if (body.object === "page" || body.object === "instagram") {
+      const entrada = body.entry && body.entry[0] && body.entry[0].messaging && body.entry[0].messaging[0];
+      if (entrada && entrada.message && entrada.message.text) {
+        const de = entrada.sender.id;
+        const texto = entrada.message.text;
+        const respuesta = await generarRespuesta(de, texto);
+        await enviarMeta(de, respuesta);
+      }
+    }
+  } catch (err) {
+    console.error("Error procesando webhook:", err.message);
+  }
+});
+
+// -- 3. Cerebro: llamada a Claude con el guion de ventas + memoria del cliente --
+async function generarRespuesta(idUsuario, textoEntrante) {
+  const historial = obtenerHistorial(idUsuario);
+  historial.push({ role: "user", content: textoEntrante });
+
+  const resp = await axios.post(
+    "https://api.anthropic.com/v1/messages",
+    {
+      model: "claude-sonnet-4-6",
+      max_tokens: 300,
+      system: construirSystemPrompt(),
+      messages: historial,
+    },
+    {
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  const textoCompleto = resp.data.content
+    .filter(function (b) { return b.type === "text"; })
+    .map(function (b) { return b.text; })
+    .join("\n") || "Disculpa, me repites eso?";
+
+  historial.push({ role: "assistant", content: textoCompleto });
+
+  const resultado = extraerDatosOcultos(textoCompleto);
+  const textoVisible = resultado.textoVisible;
+  const datos = resultado.datos;
+
+  if (datos) {
+    notificarPorCorreo(datos).catch(function (e) {
+      console.error("No se pudo enviar la notificacion por correo:", e.message);
+    });
+    notificarPorWhatsApp(datos).catch(function (e) {
+      console.error("No se pudo enviar la notificacion por WhatsApp:", e.message);
+    });
+    notificarPorTelegram(datos).catch(function (e) {
+      console.error("No se pudo enviar la notificacion por Telegram:", e.message);
+    });
+  }
+
+  return textoVisible;
+}
+
+// Quita el bloque tecnico del texto que ve el cliente y devuelve los datos parseados.
+function extraerDatosOcultos(texto) {
+  const match = texto.match(/\[\[DATOS_JSON\]\]([\s\S]*?)\[\[\/DATOS_JSON\]\]/);
+  if (!match) return { textoVisible: texto, datos: null };
+
+  const textoVisible = texto.replace(match[0], "").trim();
+  let datos = null;
+  try {
+    datos = JSON.parse(match[1].trim());
+  } catch (e) {
+    console.error("No se pudo interpretar el bloque de datos del pedido:", e.message);
+  }
+  return { textoVisible: textoVisible, datos: datos };
+}
+
+function formatearResumen(datos) {
+  const esVisita = datos.tipo_evento === "visita";
+  if (esVisita) {
+    return {
+      titulo: "Nueva visita agendada",
+      lineas: [
+        "Nombre: " + (datos.nombre || "-"),
+        "Negocio: " + (datos.nombre_negocio || "-") + " (" + (datos.tipo_negocio || "-") + ")",
+        "Direccion: " + (datos.direccion || "-"),
+        "Telefono: " + (datos.telefono || "-"),
+        "Horario preferido: " + (datos.horario_preferido || "-"),
+      ],
+    };
+  }
+  const sabores = (datos.sabores || []).map(function (s) { return s.cantidad + "x " + s.sabor; }).join(", ");
+  const lineas = [
+    "Cliente: " + (datos.nombre || "-"),
+    "Telefono: " + (datos.telefono || "-"),
+    "Entrega: " + (datos.entrega || "-") + (datos.direccion ? " - " + datos.direccion : ""),
+    "Sabores: " + sabores,
+    "Total: $" + (datos.total || 0).toLocaleString("es-CO"),
+    "Pago: " + (datos.metodo_pago || "-"),
+  ];
+  if (datos.es_mayorista) lineas.push("Mayorista - tipo de negocio: " + (datos.tipo_negocio || "-"));
+  return { titulo: "Nuevo pedido " + (datos.codigo || ""), lineas: lineas };
+}
+
+// Envia un correo con los datos del pedido o visita usando la API de Resend.
+async function notificarPorCorreo(datos) {
+  if (!RESEND_API_KEY) {
+    console.log("RESEND_API_KEY no configurada - datos capturados pero no se envio correo:", datos);
+    return;
+  }
+
+  const resumen = formatearResumen(datos);
+  const asunto = resumen.titulo + " - " + (datos.nombre || "cliente");
+  const cuerpo = "<h2>" + resumen.titulo + "</h2>" + resumen.lineas.map(function (l) { return "<p>" + l + "</p>"; }).join("");
+
+  await axios.post(
+    "https://api.resend.com/emails",
+    {
+      from: "Valentina (Dwinky) <onboarding@resend.dev>",
+      to: EMAIL_NOTIFICACIONES,
+      subject: asunto,
+      html: cuerpo,
+    },
+    { headers: { Authorization: "Bearer " + RESEND_API_KEY } }
+  );
+}
+
+// Envia un resumen por WhatsApp al numero del dueno (requiere WhatsApp oficial conectado).
+async function notificarPorWhatsApp(datos) {
+  if (!WHATSAPP_DUENO) {
+    console.log("WHATSAPP_DUENO no configurado - no se envio notificacion por WhatsApp.");
+    return;
+  }
+  const resumen = formatearResumen(datos);
+  const texto = resumen.titulo + "\n" + resumen.lineas.join("\n");
+  await enviarWhatsApp(WHATSAPP_DUENO, texto);
+}
+
+// Envia un resumen por Telegram al chat configurado - no depende de Meta para nada.
+async function notificarPorTelegram(datos) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.log("TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no configurados - no se envio notificacion por Telegram.");
+    return;
+  }
+  const resumen = formatearResumen(datos);
+  const texto = resumen.titulo + "\n" + resumen.lineas.join("\n");
+
+  await axios.post("https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendMessage", {
+    chat_id: TELEGRAM_CHAT_ID,
+    text: texto,
+  });
+}
+
+// -- 4. Envio de respuesta por WhatsApp --
+async function enviarWhatsApp(para, texto) {
+  await axios.post(
+    "https://graph.facebook.com/v19.0/" + WHATSAPP_PHONE_NUMBER_ID + "/messages",
+    {
+      messaging_product: "whatsapp",
+      to: para,
+      text: { body: texto },
+    },
+    { headers: { Authorization: "Bearer " + WHATSAPP_TOKEN } }
+  );
+}
+
+// -- 5. Envio de respuesta por Messenger / Instagram --
+async function enviarMeta(para, texto) {
+  await axios.post(
+    "https://graph.facebook.com/v19.0/me/messages?access_token=" + PAGE_ACCESS_TOKEN,
+    {
+      recipient: { id: para },
+      message: { text: texto },
+    }
+  );
+}
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, function () {
+  console.log("Agente Dwinky escuchando en el puerto " + PORT);
+});
