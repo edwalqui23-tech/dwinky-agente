@@ -115,7 +115,7 @@ async function generarRespuesta(idUsuario, textoEntrante) {
     "https://api.anthropic.com/v1/messages",
     {
       model: "claude-sonnet-4-6",
-      max_tokens: 300,
+      max_tokens: 700,
       system: construirSystemPrompt(),
       messages: historial,
     },
@@ -156,6 +156,7 @@ async function generarRespuesta(idUsuario, textoEntrante) {
 
 // Quita el bloque tecnico del texto que ve el cliente y devuelve los datos parseados.
 function extraerDatosOcultos(texto) {
+  console.log("[DEBUG] Respuesta completa de Valentina:", texto);
   const match = texto.match(/\[\[DATOS_JSON\]\]([\s\S]*?)\[\[\/DATOS_JSON\]\]/);
   if (!match) return { textoVisible: texto, datos: null };
 
