@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Panel de Control - Dwinky</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #fbf3e7;
+    color: #3a2a1a;
+  }
+  header {
+    background: #7a2e3a;
+    color: white;
+    padding: 20px 24px;
+  }
+  header h1 { margin: 0; font-size: 22px; }
+  header p { margin: 4px 0 0; opacity: 0.85; font-size: 13px; }
+  .contenedor { max-width: 1000px; margin: 0 auto; padding: 20px 16px 60px; }
+  .tarjetas {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .tarjeta {
+    background: white;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .tarjeta .numero { font-size: 26px; font-weight: 700; color: #7a2e3a; }
+  .tarjeta .etiqueta { font-size: 12px; color: #7a6a5a; margin-top: 4px; }
+  section {
+    background: white;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  section h2 { font-size: 16px; margin: 0 0 12px; color: #7a2e3a; }
+  .fila-barra { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+  .fila-barra .nombre { width: 110px; flex-shrink: 0; }
+  .fila-barra .barra-fondo { flex: 1; background: #f0e4d4; border-radius: 6px; height: 10px; overflow: hidden; }
+  .fila-barra .barra-relleno { background: #d98a4f; height: 100%; }
+  .fila-barra .valor { width: 40px; text-align: right; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #f0e4d4; }
+  th { color: #7a6a5a; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  tr:hover { background: #fbf3e7; cursor: pointer; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .badge-cerrado { background: #dcefdc; color: #2d6a2d; }
+  .badge-nuevo { background: #f0e4d4; color: #7a6a5a; }
+  .canal-icono { font-size: 14px; margin-right: 4px; }
+  #modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  #modal .caja { background: white; border-radius: 12px; max-width: 480px; width: 100%; max-height: 80vh; overflow-y: auto; padding: 16px; }
+  #modal h3 { margin-top: 0; color: #7a2e3a; }
+  .msg-cliente { background: #f0e4d4; padding: 8px 12px; border-radius: 10px; margin-bottom: 8px; max-width: 85%; }
+  .msg-valentina { background: #7a2e3a; color: white; padding: 8px 12px; border-radius: 10px; margin-bottom: 8px; max-width: 85%; margin-left: auto; }
+  .cerrar-modal { float: right; background: none; border: none; font-size: 18px; cursor: pointer; color: #7a6a5a; }
+  .cargando { text-align: center; padding: 40px; color: #7a6a5a; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🍦 Panel de Control - Dwinky</h1>
+  <p>Rendimiento de Valentina y actividad de clientes</p>
+</header>
+
+<div class="contenedor">
+  <div id="tarjetas" class="tarjetas">
+    <div class="cargando">Cargando estadisticas...</div>
+  </div>
+
+  <section>
+    <h2>Clientes por canal</h2>
+    <div id="por-canal"></div>
+  </section>
+
+  <section>
+    <h2>Estado de los clientes</h2>
+    <div id="por-estado"></div>
+  </section>
+
+  <section>
+    <h2>Sabores mas vendidos</h2>
+    <div id="sabores-top"></div>
+  </section>
+
+  <section>
+    <h2>Clientes recientes (toca uno para ver la conversacion)</h2>
+    <div id="tabla-clientes"><div class="cargando">Cargando clientes...</div></div>
+  </section>
+</div>
+
+<div id="modal">
+  <div class="caja">
+    <button class="cerrar-modal" onclick="document.getElementById('modal').style.display='none'">✕</button>
+    <h3 id="modal-titulo">Conversacion</h3>
+    <div id="modal-contenido"></div>
+  </div>
+</div>
+
+<script>
+const ICONOS_CANAL = { whatsapp: "💬", web: "🌐", messenger: "📘", instagram: "📸" };
+const NOMBRES_ESTADO = { nuevo: "Nuevo contacto", cotizando: "Cotizando", cerrado: "Pedido cerrado" };
+
+async function cargarEstadisticas() {
+  const resp = await fetch("/api/estadisticas");
+  const datos = await resp.json();
+
+  document.getElementById("tarjetas").innerHTML = `
+    <div class="tarjeta"><div class="numero">${datos.total_clientes}</div><div class="etiqueta">Personas que escribieron</div></div>
+    <div class="tarjeta"><div class="numero">${datos.total_pedidos}</div><div class="etiqueta">Pedidos cerrados</div></div>
+    <div class="tarjeta"><div class="numero">${datos.tasa_cierre}%</div><div class="etiqueta">Tasa de cierre</div></div>
+    <div class="tarjeta"><div class="numero">$${Math.round(datos.ingresos_totales).toLocaleString("es-CO")}</div><div class="etiqueta">Ingresos totales</div></div>
+  `;
+
+  const maxCanal = Math.max(1, ...datos.por_canal.map(c => parseInt(c.total)));
+  document.getElementById("por-canal").innerHTML = datos.por_canal.map(c => `
+    <div class="fila-barra">
+      <div class="nombre">${ICONOS_CANAL[c.canal] || ""} ${c.canal}</div>
+      <div class="barra-fondo"><div class="barra-relleno" style="width:${(c.total / maxCanal) * 100}%"></div></div>
+      <div class="valor">${c.total}</div>
+    </div>
+  `).join("") || "<p>Aun no hay datos.</p>";
+
+  const maxEstado = Math.max(1, ...datos.por_estado.map(c => parseInt(c.total)));
+  document.getElementById("por-estado").innerHTML = datos.por_estado.map(c => `
+    <div class="fila-barra">
+      <div class="nombre">${NOMBRES_ESTADO[c.estado] || c.estado}</div>
+      <div class="barra-fondo"><div class="barra-relleno" style="width:${(c.total / maxEstado) * 100}%"></div></div>
+      <div class="valor">${c.total}</div>
+    </div>
+  `).join("") || "<p>Aun no hay datos.</p>";
+
+  const maxSabor = Math.max(1, ...datos.sabores_top.map(s => s.cantidad));
+  document.getElementById("sabores-top").innerHTML = datos.sabores_top.map(s => `
+    <div class="fila-barra">
+      <div class="nombre">${s.sabor}</div>
+      <div class="barra-fondo"><div class="barra-relleno" style="width:${(s.cantidad / maxSabor) * 100}%"></div></div>
+      <div class="valor">${s.cantidad}</div>
+    </div>
+  `).join("") || "<p>Aun no hay pedidos.</p>";
+}
+
+async function cargarClientes() {
+  const resp = await fetch("/api/clientes");
+  const clientes = await resp.json();
+
+  if (!clientes.length) {
+    document.getElementById("tabla-clientes").innerHTML = "<p>Aun no hay clientes registrados.</p>";
+    return;
+  }
+
+  const filas = clientes.map(c => {
+    const fecha = new Date(c.ultimo_contacto).toLocaleString("es-CO", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+    const badge = c.estado === "cerrado" ? "badge-cerrado" : "badge-nuevo";
+    const etiquetaEstado = NOMBRES_ESTADO[c.estado] || c.estado;
+    return `
+      <tr onclick="verConversacion('${c.id_usuario}', '${(c.nombre || c.id_usuario).replace(/'/g, "")}')">
+        <td>${ICONOS_CANAL[c.canal] || ""} ${c.nombre || "(sin nombre)"}<br><small>${c.telefono || c.id_usuario}</small></td>
+        <td><span class="badge ${badge}">${etiquetaEstado}</span></td>
+        <td>$${Math.round(c.total_comprado).toLocaleString("es-CO")}</td>
+        <td>${fecha}</td>
+      </tr>
+    `;
+  }).join("");
+
+  document.getElementById("tabla-clientes").innerHTML = `
+    <table>
+      <thead><tr><th>Cliente</th><th>Estado</th><th>Total comprado</th><th>Ultimo contacto</th></tr></thead>
+      <tbody>${filas}</tbody>
+    </table>
+  `;
+}
+
+async function verConversacion(idUsuario, nombre) {
+  document.getElementById("modal-titulo").textContent = "Conversacion con " + nombre;
+  document.getElementById("modal-contenido").innerHTML = "<p>Cargando...</p>";
+  document.getElementById("modal").style.display = "flex";
+
+  const resp = await fetch("/api/clientes/" + encodeURIComponent(idUsuario) + "/conversacion");
+  const mensajes = await resp.json();
+
+  document.getElementById("modal-contenido").innerHTML = mensajes.map(m => `
+    <div class="${m.remitente === 'cliente' ? 'msg-cliente' : 'msg-valentina'}">${m.mensaje}</div>
+  `).join("") || "<p>No hay mensajes guardados.</p>";
+}
+
+cargarEstadisticas();
+cargarClientes();
+</script>
+</body>
+</html>
